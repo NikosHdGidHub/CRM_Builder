@@ -1,6 +1,6 @@
 import { useParams } from 'react-router-dom';
 
 export function TaskDetailView() {
-  const { id } = useParams<{ id: string }>();
-  return <div>Задача: {id}</div>;
+  const { objectId, taskId } = useParams<{ objectId: string; taskId: string }>();
+  return <div>Задача: {taskId} (объект {objectId})</div>;
 }
