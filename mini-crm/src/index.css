@@ -532,3 +532,48 @@ textarea.input {
   font-size: 12px;
   margin-top: 4px;
 }
+
+.last-comment {
+  margin-top: 20px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+.last-comment--attention {
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+@media (prefers-color-scheme: dark) {
+  .last-comment--attention {
+    background: #3a1c0c;
+    border-color: #9a3412;
+  }
+}
+
+.last-comment__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.last-comment__label {
+  font-weight: 600;
+  color: var(--text);
+}
+.last-comment--attention .last-comment__label {
+  color: #9a3412;
+}
+@media (prefers-color-scheme: dark) {
+  .last-comment--attention .last-comment__label { color: #fed7aa; }
+}
+.last-comment__meta {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.last-comment__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+}

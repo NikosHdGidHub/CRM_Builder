@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../app/AuthProvider';
 import { EditTaskDialog } from '../components/EditTaskDialog';
-import { RevisionDialog } from '../components/RevisionDialog';
+import { TransitionDialog } from '../components/TransitionDialog';
 import { StatusBadge } from '../components/StatusBadge';
 import { getObject } from '../services/objectsService';
 import {
@@ -35,6 +35,27 @@ function formatDateTime(iso: string): string {
 
 type Busy = 'send' | 'transition' | 'delete' | null;
 
+type PendingTransition =
+  | { kind: 'send' }
+  | { kind: 'accepted' }
+  | { kind: 'revision' }
+  | { kind: 'in_progress' }
+  | { kind: 'in_review' };
+
+const TRANSITION_TITLES: Record<Exclude<PendingTransition['kind'], 'send'>, string> = {
+  accepted: 'Принять задачу',
+  revision: 'Вернуть на доработку',
+  in_progress: 'Взять в работу',
+  in_review: 'Отправить на проверку',
+};
+
+const TRANSITION_LABELS: Record<Exclude<PendingTransition['kind'], 'send'>, string> = {
+  accepted: 'Принять',
+  revision: 'Вернуть на доработку',
+  in_progress: 'Перевести в работу',
+  in_review: 'Отправить на проверку',
+};
+
 export function TaskDetailView() {
   const { objectId, taskId } = useParams<{ objectId: string; taskId: string }>();
   const { profile } = useAuth();
@@ -49,7 +70,7 @@ export function TaskDetailView() {
   const [busy, setBusy] = useState<Busy>(null);
 
   const [editing, setEditing] = useState(false);
-  const [returningToRevision, setReturningToRevision] = useState(false);
+  const [pending, setPending] = useState<PendingTransition | null>(null);
 
   const isManager = profile?.role === 'manager';
   const isAssignee = task?.executor_id === profile?.id;
@@ -107,20 +128,14 @@ export function TaskDetailView() {
     }
   }
 
-  async function handleSend() {
-    if (!task) return;
-    await runAction('send', () => sendTask(task.id));
-  }
-
-  async function handleTransition(target: TaskStatus) {
-    if (!task) return;
-    await runAction('transition', () => transitionTask(task.id, target));
-  }
-
-  async function handleRevision(comment: string) {
-    if (!task) return;
-    await runAction('transition', () => transitionTask(task.id, 'revision', comment));
-    setReturningToRevision(false);
+  async function submitPending(comment: string | null) {
+    if (!pending || !task) return;
+    if (pending.kind === 'send') {
+      await runAction('send', () => sendTask(task.id, comment));
+    } else {
+      await runAction('transition', () => transitionTask(task.id, pending.kind, comment));
+    }
+    setPending(null);
   }
 
   async function handleDelete() {
@@ -142,6 +157,20 @@ export function TaskDetailView() {
     if (u?.display_name) return u.display_name;
     return userId.slice(0, 8);
   }
+
+  // Последний комментарий в истории — показываем под описанием.
+  const lastComment = useMemo(() => {
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      const h = history[i];
+      if (h.comment && h.comment.trim()) return h;
+    }
+    return null;
+  }, [history]);
+
+  const showRevisionBanner =
+    task?.status === 'revision' &&
+    lastComment !== null &&
+    lastComment.to_status === 'revision';
 
   if (loading && !task) return <div className="page-loading">Загрузка…</div>;
   if (error) return <div className="error-alert">{error}</div>;
@@ -169,6 +198,20 @@ export function TaskDetailView() {
   const hasActions =
     canManagerEdit || canManagerSend || canManagerReview || canManagerDelete ||
     canExecutorTake || canExecutorSubmit || canExecutorResume;
+
+  const transitionTitle = pending
+    ? pending.kind === 'send'
+      ? 'Отправить задачу исполнителю'
+      : TRANSITION_TITLES[pending.kind]
+    : '';
+  const pendingButtonLabel = pending
+    ? pending.kind === 'send'
+      ? 'Отправить'
+      : TRANSITION_LABELS[pending.kind]
+    : '';
+  const transitionRequired = pending?.kind === 'revision';
+  const transitionVariant =
+    pending?.kind === 'revision' ? 'danger' : 'primary';
 
   return (
     <div>
@@ -222,11 +265,11 @@ export function TaskDetailView() {
                 <button
                   type="button"
                   className="btn btn--primary"
-                  onClick={() => void handleSend()}
+                  onClick={() => setPending({ kind: 'send' })}
                   disabled={busy !== null || !task.executor_id}
                   title={!task.executor_id ? 'Сначала назначьте исполнителя' : undefined}
                 >
-                  {busy === 'send' ? 'Отправляем…' : 'Отправить'}
+                  Отправить
                 </button>
               )}
               {canManagerReview && (
@@ -234,7 +277,7 @@ export function TaskDetailView() {
                   <button
                     type="button"
                     className="btn btn--primary"
-                    onClick={() => void handleTransition('accepted')}
+                    onClick={() => setPending({ kind: 'accepted' })}
                     disabled={busy !== null}
                   >
                     Принять
@@ -242,7 +285,7 @@ export function TaskDetailView() {
                   <button
                     type="button"
                     className="btn btn--danger"
-                    onClick={() => setReturningToRevision(true)}
+                    onClick={() => setPending({ kind: 'revision' })}
                     disabled={busy !== null}
                   >
                     Вернуть на доработку
@@ -253,7 +296,7 @@ export function TaskDetailView() {
                 <button
                   type="button"
                   className="btn btn--primary"
-                  onClick={() => void handleTransition('in_progress')}
+                  onClick={() => setPending({ kind: 'in_progress' })}
                   disabled={busy !== null}
                 >
                   Взять в работу
@@ -263,7 +306,7 @@ export function TaskDetailView() {
                 <button
                   type="button"
                   className="btn btn--primary"
-                  onClick={() => void handleTransition('in_review')}
+                  onClick={() => setPending({ kind: 'in_review' })}
                   disabled={busy !== null}
                 >
                   Отправить на проверку
@@ -273,7 +316,7 @@ export function TaskDetailView() {
                 <button
                   type="button"
                   className="btn btn--primary"
-                  onClick={() => void handleTransition('in_progress')}
+                  onClick={() => setPending({ kind: 'in_progress' })}
                   disabled={busy !== null}
                 >
                   Вернуться в работу
@@ -301,6 +344,20 @@ export function TaskDetailView() {
               <p className="muted">Описание не заполнено.</p>
             )}
           </div>
+
+          {lastComment && (
+            <div className={showRevisionBanner ? 'last-comment last-comment--attention' : 'last-comment'}>
+              <div className="last-comment__head">
+                <span className="last-comment__label">
+                  {showRevisionBanner ? 'Что доработать' : 'Последний комментарий'}
+                </span>
+                <span className="last-comment__meta">
+                  {userLabel(lastComment.changed_by)} · {formatDateTime(lastComment.created_at)}
+                </span>
+              </div>
+              <div className="last-comment__text">{lastComment.comment}</div>
+            </div>
+          )}
         </div>
 
         <aside className="task-detail__side">
@@ -342,10 +399,19 @@ export function TaskDetailView() {
         />
       )}
 
-      {returningToRevision && (
-        <RevisionDialog
-          onClose={() => setReturningToRevision(false)}
-          onSubmit={handleRevision}
+      {pending && (
+        <TransitionDialog
+          title={transitionTitle}
+          submitLabel={pendingButtonLabel}
+          commentRequired={transitionRequired}
+          commentPlaceholder={
+            pending.kind === 'revision'
+              ? 'Что нужно доработать'
+              : 'Можно оставить пустым'
+          }
+          submitVariant={transitionVariant}
+          onClose={() => setPending(null)}
+          onSubmit={submitPending}
         />
       )}
     </div>

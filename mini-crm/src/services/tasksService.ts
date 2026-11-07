@@ -78,8 +78,11 @@ export async function updateTaskDraft(params: {
   if (error) throw error;
 }
 
-export async function sendTask(taskId: string): Promise<void> {
-  const { error } = await supabase.rpc('send_task', { p_task_id: taskId });
+export async function sendTask(taskId: string, comment: string | null = null): Promise<void> {
+  const { error } = await supabase.rpc('send_task', {
+    p_task_id: taskId,
+    p_comment: comment,
+  });
   if (error) throw error;
 }
 
