@@ -102,6 +102,8 @@ export function TaskDetailView() {
   }, [taskId, objectId]);
 
   useEffect(() => {
+    // load() вызывает setState только после await, но правило этого не видит
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
 
@@ -187,7 +189,7 @@ export function TaskDetailView() {
   const canManagerEdit = isManager && task.status === 'draft';
   const canManagerSend = isManager && task.status === 'draft';
   const canManagerReview = isManager && task.status === 'in_review';
-  const canManagerDelete = isManager && task.status !== 'accepted';
+  const canManagerDelete = isManager;
 
   const canExecutorTake = isAssignee && task.status === 'new';
   const canExecutorSubmit = isAssignee && task.status === 'in_progress';

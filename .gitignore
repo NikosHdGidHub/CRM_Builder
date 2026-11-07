@@ -23,3 +23,5 @@ dist-ssr
 *.sln
 *.sw?
 mini-crm_context.txt
+CRM_Builder_context.txt
+Prompt.md
