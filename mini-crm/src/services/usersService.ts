@@ -16,3 +16,11 @@ export async function listExecutors(): Promise<DirectoryUser[]> {
   if (error) throw error;
   return data ?? [];
 }
+
+export async function getUserDirectory(): Promise<DirectoryUser[]> {
+  const { data, error } = await supabase
+    .from('user_directory')
+    .select('id, display_name, role');
+  if (error) throw error;
+  return data ?? [];
+}

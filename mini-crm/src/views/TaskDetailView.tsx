@@ -1,6 +1,353 @@
-import { useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useAuth } from '../app/AuthProvider';
+import { EditTaskDialog } from '../components/EditTaskDialog';
+import { RevisionDialog } from '../components/RevisionDialog';
+import { StatusBadge } from '../components/StatusBadge';
+import { getObject } from '../services/objectsService';
+import {
+  getTask,
+  getTaskHistory,
+  sendTask,
+  softDeleteTask,
+  transitionTask,
+} from '../services/tasksService';
+import { getUserDirectory, type DirectoryUser } from '../services/usersService';
+import { taskStatusLabels } from '../types/db';
+import type {
+  ConstructionObject,
+  Task,
+  TaskStatus,
+  TaskStatusHistoryEntry,
+} from '../types/db';
+
+function transitionLabel(from: TaskStatus | null, to: TaskStatus): string {
+  if (from === null) return 'Создана';
+  if (from === 'draft' && to === 'new') return 'Отправлена в работу';
+  return `${taskStatusLabels[from]} → ${taskStatusLabels[to]}`;
+}
+
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+type Busy = 'send' | 'transition' | 'delete' | null;
 
 export function TaskDetailView() {
   const { objectId, taskId } = useParams<{ objectId: string; taskId: string }>();
-  return <div>Задача: {taskId} (объект {objectId})</div>;
+  const { profile } = useAuth();
+  const navigate = useNavigate();
+
+  const [task, setTask] = useState<Task | null>(null);
+  const [object, setObject] = useState<ConstructionObject | null>(null);
+  const [history, setHistory] = useState<TaskStatusHistoryEntry[]>([]);
+  const [directory, setDirectory] = useState<DirectoryUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<Busy>(null);
+
+  const [editing, setEditing] = useState(false);
+  const [returningToRevision, setReturningToRevision] = useState(false);
+
+  const isManager = profile?.role === 'manager';
+  const isAssignee = task?.executor_id === profile?.id;
+
+  const directoryMap = useMemo(() => {
+    const m = new Map<string, DirectoryUser>();
+    for (const u of directory) m.set(u.id, u);
+    return m;
+  }, [directory]);
+
+  const load = useCallback(async () => {
+    if (!taskId || !objectId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const [t, h, o] = await Promise.all([
+        getTask(taskId),
+        getTaskHistory(taskId),
+        getObject(objectId).catch(() => null),
+      ]);
+      setTask(t);
+      setHistory(h);
+      setObject(o);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось загрузить задачу');
+    } finally {
+      setLoading(false);
+    }
+  }, [taskId, objectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getUserDirectory()
+      .then((list) => { if (!cancelled) setDirectory(list); })
+      .catch(() => { /* не критично, покажем fallback */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function runAction(
+    kind: Exclude<Busy, null>,
+    action: () => Promise<void>,
+  ) {
+    setBusy(kind);
+    try {
+      await action();
+      await load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Ошибка');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleSend() {
+    if (!task) return;
+    await runAction('send', () => sendTask(task.id));
+  }
+
+  async function handleTransition(target: TaskStatus) {
+    if (!task) return;
+    await runAction('transition', () => transitionTask(task.id, target));
+  }
+
+  async function handleRevision(comment: string) {
+    if (!task) return;
+    await runAction('transition', () => transitionTask(task.id, 'revision', comment));
+    setReturningToRevision(false);
+  }
+
+  async function handleDelete() {
+    if (!task) return;
+    if (!window.confirm(`Удалить задачу «${task.title}»?`)) return;
+    setBusy('delete');
+    try {
+      await softDeleteTask(task.id);
+      navigate(`/objects/${objectId}`, { replace: true });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Не удалось удалить задачу');
+      setBusy(null);
+    }
+  }
+
+  function userLabel(userId: string): string {
+    if (profile && userId === profile.id) return 'Вы';
+    const u = directoryMap.get(userId);
+    if (u?.display_name) return u.display_name;
+    return userId.slice(0, 8);
+  }
+
+  if (loading && !task) return <div className="page-loading">Загрузка…</div>;
+  if (error) return <div className="error-alert">{error}</div>;
+  if (!task) {
+    return (
+      <div className="empty-state">
+        <h1>Задача не найдена</h1>
+        <p className="muted">Возможно, она была удалена.</p>
+        <Link to={`/objects/${objectId}`} className="btn" style={{ marginTop: 16 }}>
+          ← К объекту
+        </Link>
+      </div>
+    );
+  }
+
+  const canManagerEdit = isManager && task.status === 'draft';
+  const canManagerSend = isManager && task.status === 'draft';
+  const canManagerReview = isManager && task.status === 'in_review';
+  const canManagerDelete = isManager && task.status !== 'accepted';
+
+  const canExecutorTake = isAssignee && task.status === 'new';
+  const canExecutorSubmit = isAssignee && task.status === 'in_progress';
+  const canExecutorResume = isAssignee && task.status === 'revision';
+
+  const hasActions =
+    canManagerEdit || canManagerSend || canManagerReview || canManagerDelete ||
+    canExecutorTake || canExecutorSubmit || canExecutorResume;
+
+  return (
+    <div>
+      <Link to={`/objects/${objectId}`} className="back-link">
+        ← {object ? `К объекту «${object.name}»` : 'К объекту'}
+      </Link>
+
+      <div className="task-detail">
+        <div className="task-detail__main">
+          <div className="task-header">
+            <h1>{task.title}</h1>
+            <StatusBadge status={task.status} />
+          </div>
+
+          <dl className="task-meta">
+            <dt>Объект</dt>
+            <dd>
+              {object ? (
+                <Link to={`/objects/${objectId}`}>{object.name}</Link>
+              ) : (
+                '—'
+              )}
+            </dd>
+
+            <dt>Исполнитель</dt>
+            <dd>{task.executor_id ? userLabel(task.executor_id) : '—'}</dd>
+
+            <dt>Автор</dt>
+            <dd>{userLabel(task.created_by)}</dd>
+
+            <dt>Создана</dt>
+            <dd>{formatDateTime(task.created_at)}</dd>
+
+            <dt>Обновлена</dt>
+            <dd>{formatDateTime(task.updated_at)}</dd>
+          </dl>
+
+          {hasActions && (
+            <div className="task-actions">
+              {canManagerEdit && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setEditing(true)}
+                  disabled={busy !== null}
+                >
+                  Редактировать
+                </button>
+              )}
+              {canManagerSend && (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => void handleSend()}
+                  disabled={busy !== null || !task.executor_id}
+                  title={!task.executor_id ? 'Сначала назначьте исполнителя' : undefined}
+                >
+                  {busy === 'send' ? 'Отправляем…' : 'Отправить'}
+                </button>
+              )}
+              {canManagerReview && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    onClick={() => void handleTransition('accepted')}
+                    disabled={busy !== null}
+                  >
+                    Принять
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--danger"
+                    onClick={() => setReturningToRevision(true)}
+                    disabled={busy !== null}
+                  >
+                    Вернуть на доработку
+                  </button>
+                </>
+              )}
+              {canExecutorTake && (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => void handleTransition('in_progress')}
+                  disabled={busy !== null}
+                >
+                  Взять в работу
+                </button>
+              )}
+              {canExecutorSubmit && (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => void handleTransition('in_review')}
+                  disabled={busy !== null}
+                >
+                  Отправить на проверку
+                </button>
+              )}
+              {canExecutorResume && (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => void handleTransition('in_progress')}
+                  disabled={busy !== null}
+                >
+                  Вернуться в работу
+                </button>
+              )}
+              {canManagerDelete && (
+                <button
+                  type="button"
+                  className="btn btn--danger"
+                  onClick={() => void handleDelete()}
+                  disabled={busy !== null}
+                  style={{ marginLeft: 'auto' }}
+                >
+                  {busy === 'delete' ? 'Удаляем…' : 'Удалить'}
+                </button>
+              )}
+            </div>
+          )}
+
+          <div>
+            <h2>Описание</h2>
+            {task.description ? (
+              <div className="task-description">{task.description}</div>
+            ) : (
+              <p className="muted">Описание не заполнено.</p>
+            )}
+          </div>
+        </div>
+
+        <aside className="task-detail__side">
+          <h2>История</h2>
+          <div className="history">
+            {history.length === 0 && (
+              <p className="muted">Пока нет записей.</p>
+            )}
+            {history.map((h) => (
+              <div key={h.id} className="history-item">
+                <div className="history-item__head">
+                  <span className="history-item__transition">
+                    {transitionLabel(h.from_status, h.to_status)}
+                  </span>
+                  <span className="history-item__time">
+                    {formatDateTime(h.created_at)}
+                  </span>
+                </div>
+                <div className="muted" style={{ fontSize: 13 }}>
+                  {userLabel(h.changed_by)}
+                </div>
+                {h.comment && (
+                  <div className="history-item__comment">{h.comment}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </aside>
+      </div>
+
+      {editing && (
+        <EditTaskDialog
+          task={task}
+          onClose={() => setEditing(false)}
+          onSaved={async () => {
+            setEditing(false);
+            await load();
+          }}
+        />
+      )}
+
+      {returningToRevision && (
+        <RevisionDialog
+          onClose={() => setReturningToRevision(false)}
+          onSubmit={handleRevision}
+        />
+      )}
+    </div>
+  );
 }

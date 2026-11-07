@@ -385,3 +385,105 @@ textarea.input {
   min-height: 60px;
   font-family: inherit;
 }
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 16px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 14px;
+}
+.back-link:hover { color: var(--text); }
+
+.task-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 28px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .task-detail { grid-template-columns: 1fr; }
+}
+
+.task-detail__main,
+.task-detail__side { min-width: 0; }
+
+.task-detail__side h2 { font-size: 15px; }
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.task-header h1 {
+  font-size: 22px;
+  margin: 0;
+  word-break: break-word;
+}
+
+.task-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  font-size: 14px;
+  margin: 0 0 20px;
+}
+.task-meta dt { color: var(--text-muted); }
+.task-meta dd { margin: 0; word-break: break-word; }
+.task-meta a { color: inherit; }
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 24px;
+  padding: 12px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius);
+}
+
+.task-description {
+  padding: 12px 14px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.history {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 14px;
+}
+
+.history-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.history-item:last-child { border-bottom: none; }
+
+.history-item__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+.history-item__transition { font-weight: 500; }
+.history-item__time {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.history-item__comment {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: var(--bg-subtle);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  font-size: 13px;
+  word-break: break-word;
+}
