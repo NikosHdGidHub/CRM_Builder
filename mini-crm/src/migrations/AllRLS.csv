@@ -1,0 +1,5 @@
+tablename,policyname,cmd,qual,with_check
+objects,objects_select_policy,SELECT,(is_manager() OR executor_has_task_on_object(id)),null
+profiles,profiles_select_policy,SELECT,(is_manager() OR (id = auth.uid())),null
+task_status_history,task_status_history_select_policy,SELECT,can_view_task(task_id),null
+tasks,tasks_select_policy,SELECT,can_view_task(id),null

@@ -85,18 +85,5 @@
 
 После сдачи — созвон на 30–40 минут: вы показываете результат, мы задаём вопросы.
 
-# Исключения
-Можно ли менять исполнителя после отправки? - нет, для простоты.
 
-manager@test.ru 12345678
-0b1b3887-cc13-4ba7-b215-89fa34cbdcb0
 
-executor1@test.ru
-74f91381-0f3c-4e55-a60c-2ad4e3f41f77
-
-executor2@test.ru
-1e51920e-6b0d-4df5-ab4b-6bae935e0dc9
-
-UPDATE public.profiles
-SET role = 'manager'
-WHERE email = 'manager@test.ru';

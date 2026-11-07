@@ -1,0 +1,664 @@
+schema,name,definition
+public,_lock_task_and_object,"CREATE OR REPLACE FUNCTION public._lock_task_and_object(p_task_id uuid)
+ RETURNS tasks
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_object_id UUID;
+  v_task public.tasks%ROWTYPE;
+BEGIN
+  SELECT t.object_id
+    INTO v_object_id
+    FROM public.tasks t
+   WHERE t.id = p_task_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Задача не найдена';
+  END IF;
+
+  PERFORM 1
+    FROM public.objects o
+   WHERE o.id = v_object_id
+   FOR UPDATE;
+
+  SELECT t.*
+    INTO v_task
+    FROM public.tasks t
+   WHERE t.id = p_task_id
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Задача не найдена';
+  END IF;
+
+  IF v_task.object_id IS DISTINCT FROM v_object_id THEN
+    RAISE EXCEPTION 'Объект задачи изменился параллельно. Повторите операцию';
+  END IF;
+
+  RETURN v_task;
+END;
+$function$
+"
+public,can_view_task,"CREATE OR REPLACE FUNCTION public.can_view_task(p_task_id uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  SELECT
+    public.is_manager()
+    OR EXISTS (
+      SELECT 1
+      FROM public.tasks t
+      JOIN public.objects o ON o.id = t.object_id
+      WHERE t.id = p_task_id
+        AND t.executor_id = auth.uid()
+        AND t.status <> 'draft'::public.task_status
+        AND t.deleted_at IS NULL
+        AND o.deleted_at IS NULL
+    );
+$function$
+"
+public,create_object,"CREATE OR REPLACE FUNCTION public.create_object(p_name text, p_address text)
+ RETURNS uuid
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_id UUID;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Недостаточно прав';
+  END IF;
+  IF p_name IS NULL OR length(btrim(p_name)) = 0 THEN
+    RAISE EXCEPTION 'Название объекта обязательно';
+  END IF;
+  IF p_address IS NULL OR length(btrim(p_address)) = 0 THEN
+    RAISE EXCEPTION 'Адрес объекта обязателен';
+  END IF;
+
+  INSERT INTO public.objects (name, address, created_by)
+  VALUES (btrim(p_name), btrim(p_address), auth.uid())
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$function$
+"
+public,create_task,"CREATE OR REPLACE FUNCTION public.create_task(p_title text, p_description text, p_object_id uuid)
+ RETURNS uuid
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_id UUID;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Недостаточно прав';
+  END IF;
+  IF p_title IS NULL OR length(btrim(p_title)) = 0 THEN
+    RAISE EXCEPTION 'Название задачи обязательно';
+  END IF;
+
+  PERFORM 1
+    FROM public.objects o
+   WHERE o.id = p_object_id AND o.deleted_at IS NULL
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Активный объект не найден';
+  END IF;
+
+  INSERT INTO public.tasks (
+    title, description, object_id, executor_id, status, created_by
+  ) VALUES (
+    btrim(p_title), p_description, p_object_id, NULL, 'draft', auth.uid()
+  )
+  RETURNING id INTO v_id;
+
+  -- INSERT-триггер автоматически создаёт историю NULL -> draft.
+  RETURN v_id;
+END;
+$function$
+"
+public,executor_has_task_on_object,"CREATE OR REPLACE FUNCTION public.executor_has_task_on_object(p_object_id uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.tasks t
+    JOIN public.objects o ON o.id = t.object_id
+    WHERE t.object_id = p_object_id
+      AND t.executor_id = auth.uid()
+      AND t.status <> 'draft'::public.task_status
+      AND t.deleted_at IS NULL
+      AND o.deleted_at IS NULL
+  );
+$function$
+"
+public,guard_task_update,"CREATE OR REPLACE FUNCTION public.guard_task_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_actor UUID := auth.uid();
+BEGIN
+  -- Содержимое и исполнитель после отправки изменить нельзя.
+  IF OLD.status <> 'draft'::public.task_status THEN
+    IF NEW.title IS DISTINCT FROM OLD.title
+       OR NEW.description IS DISTINCT FROM OLD.description
+       OR NEW.object_id IS DISTINCT FROM OLD.object_id
+       OR NEW.executor_id IS DISTINCT FROM OLD.executor_id
+       OR NEW.created_by IS DISTINCT FROM OLD.created_by
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+      RAISE EXCEPTION 'Нельзя редактировать отправленную задачу';
+    END IF;
+  END IF;
+
+  -- Удалённая задача не может менять статус до восстановления.
+  IF OLD.deleted_at IS NOT NULL AND NEW.status IS DISTINCT FROM OLD.status THEN
+    RAISE EXCEPTION 'Сначала восстановите задачу';
+  END IF;
+
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    -- Проверяем допустимую дугу перехода и роль действующего пользователя.
+    IF OLD.status = 'draft'::public.task_status
+       AND NEW.status = 'new'::public.task_status THEN
+      IF NOT public.is_manager() THEN
+        RAISE EXCEPTION 'Только постановщик может отправить задачу';
+      END IF;
+      IF NEW.executor_id IS NULL THEN
+        RAISE EXCEPTION 'Перед отправкой необходимо назначить исполнителя';
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM public.profiles p
+         WHERE p.id = NEW.executor_id
+           AND p.role = 'executor'::public.app_role
+      ) THEN
+        RAISE EXCEPTION 'Назначенный пользователь не является исполнителем';
+      END IF;
+
+    ELSIF OLD.status = 'new'::public.task_status
+       AND NEW.status = 'in_progress'::public.task_status THEN
+      IF v_actor IS NULL OR v_actor <> OLD.executor_id OR NOT EXISTS (
+        SELECT 1 FROM public.profiles p
+         WHERE p.id = v_actor AND p.role = 'executor'::public.app_role
+      ) THEN
+        RAISE EXCEPTION 'Взять задачу в работу может только назначенный исполнитель';
+      END IF;
+
+    ELSIF OLD.status = 'in_progress'::public.task_status
+       AND NEW.status = 'in_review'::public.task_status THEN
+      IF v_actor IS NULL OR v_actor <> OLD.executor_id OR NOT EXISTS (
+        SELECT 1 FROM public.profiles p
+         WHERE p.id = v_actor AND p.role = 'executor'::public.app_role
+      ) THEN
+        RAISE EXCEPTION 'Отправить задачу на проверку может только назначенный исполнитель';
+      END IF;
+
+    ELSIF OLD.status = 'in_review'::public.task_status
+       AND NEW.status IN ('accepted'::public.task_status, 'revision'::public.task_status) THEN
+      IF NOT public.is_manager() THEN
+        RAISE EXCEPTION 'Проверять задачу может только постановщик';
+      END IF;
+
+    ELSIF OLD.status = 'revision'::public.task_status
+       AND NEW.status = 'in_progress'::public.task_status THEN
+      IF v_actor IS NULL OR v_actor <> OLD.executor_id OR NOT EXISTS (
+        SELECT 1 FROM public.profiles p
+         WHERE p.id = v_actor AND p.role = 'executor'::public.app_role
+      ) THEN
+        RAISE EXCEPTION 'Вернуть задачу в работу может только назначенный исполнитель';
+      END IF;
+
+    ELSE
+      RAISE EXCEPTION 'Недопустимый переход статуса: % -> %', OLD.status, NEW.status;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$function$
+"
+public,handle_auth_user_email_update,"CREATE OR REPLACE FUNCTION public.handle_auth_user_email_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+BEGIN
+  IF NEW.email IS DISTINCT FROM OLD.email THEN
+    UPDATE public.profiles SET email = COALESCE(NEW.email, '') WHERE id = NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$function$
+"
+public,handle_new_auth_user,"CREATE OR REPLACE FUNCTION public.handle_new_auth_user()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+BEGIN
+  INSERT INTO public.profiles (id, email, display_name, role)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.email, ''),
+    COALESCE(
+      NULLIF(btrim(NEW.raw_user_meta_data ->> 'display_name'), ''),
+      NULLIF(btrim(NEW.raw_user_meta_data ->> 'full_name'), ''),
+      ''
+    ),
+    'executor'
+  )
+  ON CONFLICT (id) DO UPDATE
+    SET email = EXCLUDED.email;
+
+  RETURN NEW;
+END;
+$function$
+"
+public,is_manager,"CREATE OR REPLACE FUNCTION public.is_manager()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.role = 'manager'::public.app_role
+  );
+$function$
+"
+public,restore_object,"CREATE OR REPLACE FUNCTION public.restore_object(p_object_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Недостаточно прав';
+  END IF;
+
+  UPDATE public.objects
+     SET deleted_at = NULL, deleted_by = NULL
+   WHERE id = p_object_id AND deleted_at IS NOT NULL;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Удалённый объект не найден';
+  END IF;
+  -- Связанные задачи намеренно НЕ восстанавливаются.
+END;
+$function$
+"
+public,restore_task,"CREATE OR REPLACE FUNCTION public.restore_task(p_task_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_task public.tasks%ROWTYPE;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Недостаточно прав';
+  END IF;
+
+  v_task := public._lock_task_and_object(p_task_id);
+  IF v_task.deleted_at IS NULL THEN
+    RAISE EXCEPTION 'Задача не удалена';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.objects o
+     WHERE o.id = v_task.object_id AND o.deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Сначала восстановите объект';
+  END IF;
+
+  UPDATE public.tasks
+     SET deleted_at = NULL, deleted_by = NULL
+   WHERE id = p_task_id;
+  -- Статус и история не меняются.
+END;
+$function$
+"
+public,rls_auto_enable,"CREATE OR REPLACE FUNCTION public.rls_auto_enable()
+ RETURNS event_trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'pg_catalog'
+AS $function$
+DECLARE
+  cmd record;
+  tbl name;
+BEGIN
+  FOR cmd IN
+    SELECT *
+    FROM pg_event_trigger_ddl_commands()
+    WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+      AND object_type IN ('table','partitioned table')
+  LOOP
+     IF cmd.schema_name IS NOT NULL AND cmd.schema_name IN ('public') AND cmd.schema_name NOT IN ('pg_catalog','information_schema') AND cmd.schema_name NOT LIKE 'pg_toast%' AND cmd.schema_name NOT LIKE 'pg_temp%' THEN
+      BEGIN
+        SELECT c.relname INTO tbl FROM pg_catalog.pg_class c WHERE c.oid = cmd.objid;
+        EXECUTE format('alter table if exists %I.%I enable row level security', cmd.schema_name, tbl);
+        RAISE LOG 'rls_auto_enable: enabled RLS on %', cmd.object_identity;
+      EXCEPTION
+        WHEN OTHERS THEN
+          RAISE LOG 'rls_auto_enable: failed to enable RLS on %', cmd.object_identity;
+      END;
+     ELSE
+        RAISE LOG 'rls_auto_enable: skip % (either system schema or not in enforced list: %.)', cmd.object_identity, cmd.schema_name;
+     END IF;
+  END LOOP;
+END;
+$function$
+"
+public,send_task,"CREATE OR REPLACE FUNCTION public.send_task(p_task_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$DECLARE
+  v_task public.tasks%ROWTYPE;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Недостаточно прав';
+  END IF;
+
+  v_task := public._lock_task_and_object(p_task_id);
+
+  IF v_task.deleted_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Нельзя отправить удалённую задачу';
+  END IF;
+  IF v_task.status <> 'draft'::public.task_status THEN
+    RAISE EXCEPTION 'Отправить можно только черновик';
+  END IF;
+  IF v_task.executor_id IS NULL THEN
+    RAISE EXCEPTION 'Сначала назначьте исполнителя';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.profiles p
+     WHERE p.id = v_task.executor_id
+       AND p.role = 'executor'::public.app_role
+  ) THEN
+    RAISE EXCEPTION 'Назначенный пользователь больше не является исполнителем';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.objects o
+     WHERE o.id = v_task.object_id AND o.deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Объект удалён';
+  END IF;
+
+  PERFORM set_config('app.task_status_comment', '', true);
+  UPDATE public.tasks SET status = 'new' WHERE id = p_task_id;
+  PERFORM set_config('app.task_status_comment', '', true);
+  -- UPDATE-триггеры проверяют переход и добавляют draft -> new в историю.
+END;$function$
+"
+public,set_updated_at,"CREATE OR REPLACE FUNCTION public.set_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$function$
+"
+public,soft_delete_object,"CREATE OR REPLACE FUNCTION public.soft_delete_object(p_object_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_deleted_at TIMESTAMPTZ;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Недостаточно прав';
+  END IF;
+
+  SELECT o.deleted_at INTO v_deleted_at
+    FROM public.objects o
+   WHERE o.id = p_object_id
+   FOR UPDATE;
+
+  IF NOT FOUND OR v_deleted_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Активный объект не найден';
+  END IF;
+
+  -- Если есть хотя бы одна неудалённая задача не в статусе accepted,
+  -- объект удалять нельзя. Принятые задачи удаляются каскадно.
+  IF EXISTS (
+    SELECT 1
+      FROM public.tasks t
+     WHERE t.object_id = p_object_id
+       AND t.deleted_at IS NULL
+       AND t.status <> 'accepted'::public.task_status
+  ) THEN
+    RAISE EXCEPTION 'Нельзя удалить объект: на нём есть незавершённые задачи';
+  END IF;
+
+  UPDATE public.tasks
+     SET deleted_at = now(), deleted_by = auth.uid()
+   WHERE object_id = p_object_id
+     AND deleted_at IS NULL;
+
+  UPDATE public.objects
+     SET deleted_at = now(), deleted_by = auth.uid()
+   WHERE id = p_object_id;
+END;
+$function$
+"
+public,soft_delete_task,"CREATE OR REPLACE FUNCTION public.soft_delete_task(p_task_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_task public.tasks%ROWTYPE;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Недостаточно прав';
+  END IF;
+
+  v_task := public._lock_task_and_object(p_task_id);
+  IF v_task.deleted_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Задача уже удалена';
+  END IF;
+
+  UPDATE public.tasks
+     SET deleted_at = now(), deleted_by = auth.uid()
+   WHERE id = p_task_id;
+  -- Удаление не является переходом статуса и не попадает в историю.
+END;
+$function$
+"
+public,transition_task,"CREATE OR REPLACE FUNCTION public.transition_task(p_task_id uuid, p_to_status task_status, p_comment text DEFAULT NULL::text)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_task public.tasks%ROWTYPE;
+  v_comment TEXT := NULLIF(btrim(p_comment), '');
+BEGIN
+  v_task := public._lock_task_and_object(p_task_id);
+
+  IF v_task.deleted_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Нельзя менять статус удалённой задачи';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.objects o
+     WHERE o.id = v_task.object_id AND o.deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Объект удалён';
+  END IF;
+
+  -- Роль и конкретный допустимый переход дополнительно проверяются триггером.
+  IF v_task.status = 'in_review'::public.task_status
+     AND p_to_status = 'revision'::public.task_status
+     AND v_comment IS NULL THEN
+    RAISE EXCEPTION 'При возврате на доработку комментарий обязателен';
+  END IF;
+
+  -- Передаём комментарий триггеру истории только на время этой транзакции.
+  PERFORM set_config('app.task_status_comment', COALESCE(v_comment, ''), true);
+  UPDATE public.tasks SET status = p_to_status WHERE id = p_task_id;
+  PERFORM set_config('app.task_status_comment', '', true);
+END;
+$function$
+"
+public,update_object,"CREATE OR REPLACE FUNCTION public.update_object(p_object_id uuid, p_name text, p_address text)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Недостаточно прав';
+  END IF;
+  IF p_name IS NULL OR length(btrim(p_name)) = 0 THEN
+    RAISE EXCEPTION 'Название объекта обязательно';
+  END IF;
+  IF p_address IS NULL OR length(btrim(p_address)) = 0 THEN
+    RAISE EXCEPTION 'Адрес объекта обязателен';
+  END IF;
+
+  UPDATE public.objects
+     SET name = btrim(p_name), address = btrim(p_address)
+   WHERE id = p_object_id AND deleted_at IS NULL;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Активный объект не найден';
+  END IF;
+END;
+$function$
+"
+public,update_task_draft,"CREATE OR REPLACE FUNCTION public.update_task_draft(p_task_id uuid, p_title text, p_description text, p_object_id uuid, p_executor_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_old_object_id UUID;
+  v_locked_object_id UUID;
+  v_task public.tasks%ROWTYPE;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Недостаточно прав';
+  END IF;
+  IF p_title IS NULL OR length(btrim(p_title)) = 0 THEN
+    RAISE EXCEPTION 'Название задачи обязательно';
+  END IF;
+
+  SELECT t.object_id INTO v_old_object_id
+    FROM public.tasks t
+   WHERE t.id = p_task_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Задача не найдена';
+  END IF;
+
+  -- Блокируем исходный и целевой объекты в стабильном порядке.
+  FOR v_locked_object_id IN
+    SELECT o.id
+      FROM public.objects o
+     WHERE o.id IN (v_old_object_id, p_object_id)
+     ORDER BY o.id
+     FOR UPDATE
+  LOOP
+    NULL;
+  END LOOP;
+
+  SELECT t.* INTO v_task
+    FROM public.tasks t
+   WHERE t.id = p_task_id
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Задача не найдена';
+  END IF;
+  IF v_task.object_id IS DISTINCT FROM v_old_object_id THEN
+    RAISE EXCEPTION 'Задача была изменена параллельно. Повторите операцию';
+  END IF;
+  IF v_task.deleted_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Нельзя редактировать удалённую задачу';
+  END IF;
+  IF v_task.status <> 'draft'::public.task_status THEN
+    RAISE EXCEPTION 'Редактировать можно только черновик';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.objects o
+     WHERE o.id = p_object_id AND o.deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Целевой объект не найден или удалён';
+  END IF;
+
+  IF p_executor_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM public.profiles p
+     WHERE p.id = p_executor_id AND p.role = 'executor'::public.app_role
+  ) THEN
+    RAISE EXCEPTION 'Выбранный пользователь не является исполнителем';
+  END IF;
+
+  UPDATE public.tasks
+     SET title = btrim(p_title),
+         description = p_description,
+         object_id = p_object_id,
+         executor_id = p_executor_id
+   WHERE id = p_task_id;
+END;
+$function$
+"
+public,write_task_status_history,"CREATE OR REPLACE FUNCTION public.write_task_status_history()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    INSERT INTO public.task_status_history (
+      task_id, changed_by, from_status, to_status, comment
+    ) VALUES (
+      NEW.id, NEW.created_by, NULL, NEW.status, NULL
+    );
+    RETURN NEW;
+  END IF;
+
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    INSERT INTO public.task_status_history (
+      task_id, changed_by, from_status, to_status, comment
+    ) VALUES (
+      NEW.id,
+      auth.uid(),
+      OLD.status,
+      NEW.status,
+      NULLIF(btrim(current_setting('app.task_status_comment', true)), '')
+    );
+  END IF;
+
+  RETURN NEW;
+END;
+$function$
+"
