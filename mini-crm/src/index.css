@@ -487,3 +487,48 @@ textarea.input {
   font-size: 13px;
   word-break: break-word;
 }
+
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.tab:hover { color: var(--text); }
+.tab--active {
+  color: var(--text);
+  border-bottom-color: var(--primary);
+  font-weight: 500;
+}
+
+.tab__count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.tab--active .tab__count {
+  background: var(--primary);
+  color: #fff;
+}
+
+.task-card__meta {
+  font-size: 12px;
+  margin-top: 4px;
+}
