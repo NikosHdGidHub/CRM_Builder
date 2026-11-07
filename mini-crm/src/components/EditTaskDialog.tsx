@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { listExecutors, type DirectoryUser } from '../services/usersService';
+import { displayUser, listExecutors, type DirectoryUser } from '../services/usersService';
 import { updateTaskDraft } from '../services/tasksService';
 import type { Task } from '../types/db';
 
@@ -93,7 +93,7 @@ export function EditTaskDialog({
               <option value="">— не выбран —</option>
               {executors.map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.display_name || u.id.slice(0, 8)}
+                  {displayUser(u)}
                 </option>
               ))}
             </select>

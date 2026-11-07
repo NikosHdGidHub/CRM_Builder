@@ -12,7 +12,7 @@ import {
   softDeleteTask,
   transitionTask,
 } from '../services/tasksService';
-import { getUserDirectory, type DirectoryUser } from '../services/usersService';
+import { displayUser, getUserDirectory, type DirectoryUser } from '../services/usersService';
 import { taskStatusLabels } from '../types/db';
 import type {
   ConstructionObject,
@@ -153,9 +153,7 @@ export function TaskDetailView() {
 
   function userLabel(userId: string): string {
     if (profile && userId === profile.id) return 'Вы';
-    const u = directoryMap.get(userId);
-    if (u?.display_name) return u.display_name;
-    return userId.slice(0, 8);
+    return displayUser(directoryMap.get(userId));
   }
 
   // Последний комментарий в истории — показываем под описанием.
