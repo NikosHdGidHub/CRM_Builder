@@ -264,3 +264,124 @@ p  { margin: 0 0 8px; }
   }
   .app-main { padding: 16px; }
 }
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 16px;
+  background: var(--bg-subtle);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 32px 28px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+}
+
+.login-title {
+  font-size: 22px;
+  margin: 0 0 4px;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  margin: 0 0 24px;
+}
+
+.login-hint {
+  font-size: 12px;
+  margin-top: 16px;
+  margin-bottom: 0;
+  text-align: center;
+}
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.page-head--tight {
+  align-items: center;
+  margin-top: 8px;
+  margin-bottom: 12px;
+}
+.page-head h2 { margin: 0; }
+
+.btn--danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.btn--danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  .btn--danger:hover:not(:disabled) { color: #16171d; }
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.badge--draft       { background: #e5e7eb; color: #374151; }
+.badge--new         { background: #dbeafe; color: #1e40af; }
+.badge--in_progress { background: #fef9c3; color: #854d0e; }
+.badge--in_review   { background: #ede9fe; color: #5b21b6; }
+.badge--accepted    { background: #dcfce7; color: #166534; }
+.badge--revision    { background: #ffedd5; color: #9a3412; }
+
+@media (prefers-color-scheme: dark) {
+  .badge--draft       { background: #374151; color: #d1d5db; }
+  .badge--new         { background: #1e3a8a; color: #bfdbfe; }
+  .badge--in_progress { background: #713f12; color: #fef08a; }
+  .badge--in_review   { background: #4c1d95; color: #e9d5ff; }
+  .badge--accepted    { background: #14532d; color: #bbf7d0; }
+  .badge--revision    { background: #7c2d12; color: #fed7aa; }
+}
+
+.task-card {
+  display: block;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg);
+  transition: background 0.15s;
+}
+.task-card:hover { background: var(--bg-subtle); }
+.task-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.task-card__title { font-weight: 500; }
+.task-card__desc {
+  font-size: 13px;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row--between {
+  justify-content: space-between;
+}
+
+textarea.input {
+  resize: vertical;
+  min-height: 60px;
+  font-family: inherit;
+}

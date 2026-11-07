@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 import { Link, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../app/AuthProvider';
 import { useObjects } from '../app/ObjectsProvider';
+import { ObjectFormDialog, type ObjectFormValues } from '../components/ObjectFormDialog';
 import { roleLabels } from '../types/db';
 import { createObject } from '../services/objectsService';
 
@@ -15,8 +16,8 @@ export function Sidebar() {
   if (!profile) return null;
   const isManager = profile.role === 'manager';
 
-  async function handleCreate(name: string, address: string) {
-    const id = await createObject(name, address);
+  async function handleCreate(values: ObjectFormValues) {
+    const id = await createObject(values.name, values.address);
     await refresh();
     navigate(`/objects/${id}`);
     setCreatingOpen(false);
@@ -93,7 +94,9 @@ export function Sidebar() {
       </div>
 
       {creatingOpen && (
-        <CreateObjectDialog
+        <ObjectFormDialog
+          title="Новый объект"
+          submitLabel="Создать"
           onClose={() => setCreatingOpen(false)}
           onSubmit={handleCreate}
         />
@@ -102,65 +105,3 @@ export function Sidebar() {
   );
 }
 
-function CreateObjectDialog({
-  onClose,
-  onSubmit,
-}: {
-  onClose: () => void;
-  onSubmit: (name: string, address: string) => Promise<void>;
-}) {
-  const [name, setName] = useState('');
-  const [address, setAddress] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSubmitting(true);
-    try {
-      await onSubmit(name.trim(), address.trim());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось создать объект');
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Новый объект</h2>
-        <form onSubmit={handleSubmit} className="stack">
-          <label className="field">
-            <span className="field__label">Название</span>
-            <input
-              className="input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              autoFocus
-            />
-          </label>
-          <label className="field">
-            <span className="field__label">Адрес</span>
-            <input
-              className="input"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              required
-            />
-          </label>
-          {error && <div className="error-alert">{error}</div>}
-          <div className="row row--end">
-            <button type="button" className="btn" onClick={onClose} disabled={submitting}>
-              Отмена
-            </button>
-            <button type="submit" className="btn btn--primary" disabled={submitting}>
-              {submitting ? 'Создаём…' : 'Создать'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
